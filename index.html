@@ -39,6 +39,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -147,7 +148,8 @@ function bakedMaterial(m) {
   });
 }
 
-new GLTFLoader().load("house.glb?t=" + Date.now(), gltf => {  // never a stale cached model
+const draco = new DRACOLoader().setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/");
+new GLTFLoader().setDRACOLoader(draco).load("house.glb?t=" + Date.now(), gltf => {  // never a stale cached model
   const root = gltf.scene;
   let baked = 0;
   root.traverse(o => {
