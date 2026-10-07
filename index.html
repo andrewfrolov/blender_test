@@ -9,19 +9,28 @@
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
                font: 13px/1.4 -apple-system, system-ui, sans-serif; overflow: hidden; }
   canvas { display: block; }
-  #ui { position: absolute; top: 12px; left: 12px; display: flex; flex-wrap: wrap; gap: 6px;
-        max-width: calc(100% - 24px); }
-  #ui button { border: 0; border-radius: 6px; padding: 7px 11px; background: var(--panel);
-               color: var(--text); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
-  #ui button.on { background: var(--accent); color: #fff; }
-  #rooms { position: absolute; top: 52px; left: 12px; display: flex; flex-direction: column; gap: 6px;
-           max-width: calc(100% - 24px); }
-  #rooms .row { display: flex; flex-wrap: wrap; gap: 6px; }
-  #rooms button { border: 0; border-radius: 6px; padding: 6px 10px; background: var(--panel);
-                  color: var(--text); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
-  #rooms button.on { background: var(--accent); color: #fff; }
+  /* the button rows stack, so a row that wraps on a narrow screen pushes the next one down */
+  #bar { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; flex-direction: column;
+         align-items: flex-start; gap: 6px; pointer-events: none; }
+  #bar .row { display: flex; flex-wrap: wrap; gap: 6px; pointer-events: auto; }
+  #bar .row:empty { display: none; }
+  #bar button { border: 0; border-radius: 6px; padding: 6px 10px; background: var(--panel);
+                color: var(--text); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.15); font: inherit; }
+  #ui button { padding: 7px 11px; }
+  #bar button.on { background: var(--accent); color: #fff; }
   #angles button { font-size: 12px; padding: 5px 9px; }
-  #hint { position: absolute; bottom: 10px; left: 12px; opacity: .65; }
+  #hint { position: absolute; bottom: 10px; left: 12px; right: 12px; opacity: .65; }
+  #hint .touch { display: none; }
+  @media (max-width: 600px) {
+    #bar { top: 8px; left: 8px; right: 8px; gap: 5px; }
+    #bar .row { gap: 5px; }
+    #bar button, #ui button { padding: 5px 8px; font-size: 12px; }
+    #angles button { font-size: 11px; padding: 4px 7px; }
+  }
+  @media (hover: none) {
+    #hint .keys { display: none; }
+    #hint .touch { display: inline; }
+  }
   #loading { position: absolute; inset: 0; display: grid; place-items: center; font-size: 15px; }
 </style>
 <script type="importmap">
@@ -33,15 +42,18 @@
 </head>
 <body>
 <div id="loading">Loading house…</div>
-<div id="ui">
+<div id="bar">
+<div id="ui" class="row">
+  <button id="tour">▶ Tour</button>
   <button data-view="album" class="on">Album view</button>
   <button data-view="ground">Ground floor</button>
   <button data-view="house">Whole house</button>
   <button id="upper">Show upper floors</button>
-  <button id="tour">▶ Tour</button>
 </div>
-<div id="rooms"><div class="row" id="roomlist"></div><div class="row" id="angles"></div></div>
-<div id="hint">Drag to orbit · right-drag to pan · scroll to zoom · keys 1–3 switch angle · space pauses the tour, Esc ends it</div>
+<div class="row" id="roomlist"></div>
+<div class="row" id="angles"></div>
+</div>
+<div id="hint"><span class="keys">Drag to orbit · right-drag to pan · scroll to zoom · keys 1–3 switch angle · space pauses the tour, Esc ends it</span><span class="touch">Drag to orbit · two fingers to pan and zoom</span></div>
 <script type="module">
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -430,6 +442,7 @@ new GLTFLoader().setDRACOLoader(draco).load("house.glb?t=" + Date.now(), gltf =>
   scene.add(root);
   document.getElementById("loading").remove();
   go("album");
+  if (new URLSearchParams(location.search).has("tour")) startTour();  // ?tour opens straight into the walk
 }, undefined, err => {
   document.getElementById("loading").textContent = "Could not load house.glb: " + err.message;
 });
