@@ -38,9 +38,10 @@
   <button data-view="ground">Ground floor</button>
   <button data-view="house">Whole house</button>
   <button id="upper">Show upper floors</button>
+  <button id="tour">▶ Tour</button>
 </div>
 <div id="rooms"><div class="row" id="roomlist"></div><div class="row" id="angles"></div></div>
-<div id="hint">Drag to orbit · right-drag to pan · scroll to zoom · keys 1–3 switch angle</div>
+<div id="hint">Drag to orbit · right-drag to pan · scroll to zoom · keys 1–3 switch angle · space pauses the tour, Esc ends it</div>
 <script type="module">
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -201,6 +202,7 @@ function frameCamera() {
 }
 let current = null;
 function setView(v) {
+  stopTour();
   current = v;
   frameCamera();
   camera.position.copy(v.pos);
@@ -214,6 +216,160 @@ function go(name) {
 }
 document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => go(b.dataset.view));
 document.getElementById("upper").onclick = () => setUpper(!showUpper);
+
+// Automated walk through the ground floor: the route of blender/flythrough.py (copied here,
+// keep in step by hand), smoothed the same way and played back in real time.
+// (x, y, yaw deg [0 = +X, 90 = +Y towards the garden], pitch deg, hold s)
+const TOUR_ROUTE = [
+  [5.50, 1.75, 100, -4, 1.0],   // hall, just inside the front door
+  [5.25, 2.40, 160, -6, 0.5],   // mirror, coat rail and bench
+  [4.84, 3.20, 95, -4, 0],
+  [4.82, 3.87, 80, -4, 0],      // through the opening (west of the hall curtain)
+  [5.30, 4.35, 0, -6, 0],       // stair foot
+  [6.17, 4.38, 0, -6, 0],       // guest room door
+  [7.05, 4.10, -40, -12, 0],
+  [7.35, 3.55, -60, -14, 1.0],  // daybed, desk, striped rug
+  [7.35, 3.50, -95, -8, 1.0],   // window
+  [6.90, 4.25, 165, -6, 0],
+  [6.17, 4.40, 180, -6, 0],
+  [5.25, 4.25, 185, -6, 0],
+  [4.55, 4.05, 170, -6, 0],     // past the palm into the living room
+  [3.80, 4.25, 150, -8, 0],
+  [3.60, 5.30, 185, -10, 0.8],  // sofa, rug, coffee table
+  [3.30, 4.50, 265, -6, 0],
+  [3.25, 3.45, 250, -8, 0],     // study door
+  [2.95, 2.55, 215, -12, 0.5],  // red desk and the window bench
+  [2.95, 2.50, 150, -8, 0.5],   // wall shelves
+  [3.25, 3.45, 85, -4, 0],
+  [3.30, 4.50, 90, -4, 0],
+  [3.45, 6.90, 115, -6, 0],
+  [3.95, 8.00, 145, -8, 0.8],   // dining table, pendant, bookcase
+  [4.25, 9.60, 95, -4, 0],
+  [4.55, 9.15, 0, -6, 0],       // into the kitchen, south of the island
+  [5.40, 9.00, 10, -8, 0],
+  [6.10, 8.85, 25, -8, 0],      // between the concrete column and the wall
+  [7.55, 9.10, 60, -8, 0],
+  [7.85, 10.10, 95, -8, 0],     // round the end of the island
+  [7.70, 11.30, 125, -10, 0],
+  [6.60, 11.10, 85, -6, 0.8],   // counter under the windows
+  [7.60, 11.35, 200, -10, 0.6], // back to the island and the column
+  [7.85, 10.05, 235, -10, 0],
+  [7.40, 9.05, 205, -6, 0],
+  [6.10, 8.85, 190, -6, 0],
+  [5.50, 8.95, 268, -6, 0],
+  [5.49, 8.33, 270, -8, 0],     // sliding door to the corridor
+  [5.50, 7.70, 270, -14, 1.0],  // washbasin niche under the stair
+  [5.60, 7.70, 0, -6, 0],
+  [6.20, 7.70, 0, -6, 0],       // laundry door
+  [7.30, 7.60, -15, -10, 0.8],  // curtain, radiator, glass blocks
+  [7.74, 6.95, 270, -8, 0],
+  [7.74, 6.29, 270, -10, 0],    // bathroom door
+  [7.74, 5.80, 225, -14, 0.6],  // shower and vanity
+  [7.74, 5.78, 330, -14, 0.5],  // toilet and towel ladder
+  [7.74, 6.95, 95, -6, 0],
+  [6.20, 7.70, 175, -6, 0],
+  [5.50, 7.75, 90, -4, 0],
+  [5.49, 8.33, 90, -4, 0],
+  [5.45, 8.95, 150, -4, 0],
+  [4.60, 9.10, 230, -6, 0],     // back through the dining area
+  [4.05, 7.40, 262, -8, 0],
+  [3.60, 5.40, 265, -6, 0],
+  [3.35, 4.15, 98, -4, 2.5],    // the album view: down the room to the garden — end
+];
+const TOUR = { fps: 25, speed: 0.65, turn: 50, eye: 1.5, lens: 16, smooth: 0.7 };
+
+function tourFrames() {
+  const { fps, speed, turn, smooth } = TOUR;
+  const R = TOUR_ROUTE;
+  const yaws = [R[0][2]];
+  for (const r of R.slice(1)) {  // unwrap so the camera always turns the short way
+    let y = r[2];
+    while (y - yaws.at(-1) > 180) y -= 360;
+    while (y - yaws.at(-1) < -180) y += 360;
+    yaws.push(y);
+  }
+  const catmull = (p0, p1, p2, p3, t) => 0.5 * ((2 * p1) + (-p0 + p2) * t
+    + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3);
+  const frames = [];
+  for (let i = 0; i < R.length; i++) {
+    for (let k = 0; k < Math.floor(R[i][4] * fps); k++) frames.push([R[i][0], R[i][1], yaws[i], R[i][3]]);
+    if (i === R.length - 1) break;
+    const dist = Math.hypot(R[i + 1][0] - R[i][0], R[i + 1][1] - R[i][1]);
+    const dur = Math.max(dist / speed, Math.abs(yaws[i + 1] - yaws[i]) / turn, 0.4);
+    const n = Math.max(2, Math.floor(dur * fps));
+    const a = R[Math.max(i - 1, 0)], d = R[Math.min(i + 2, R.length - 1)];
+    for (let k = 0; k < n; k++) {
+      const t = k / n, e = t * t * (3 - 2 * t);  // ease the look direction
+      frames.push([catmull(a[0], R[i][0], R[i + 1][0], d[0], t), catmull(a[1], R[i][1], R[i + 1][1], d[1], t),
+                   yaws[i] + (yaws[i + 1] - yaws[i]) * e, R[i][3] + (R[i + 1][3] - R[i][3]) * e]);
+    }
+  }
+  frames.push([R.at(-1)[0], R.at(-1)[1], yaws.at(-1), R.at(-1)[3]]);
+  const w = Math.floor(smooth * fps), out = [];  // gaussian smoothing
+  const kern = Array.from({ length: 2 * w + 1 }, (_, k) => Math.exp(-0.5 * ((k - w) / (w / 2.5)) ** 2));
+  for (let f = 0; f < frames.length; f++) {
+    const acc = [0, 0, 0, 0];
+    let tot = 0;
+    kern.forEach((g, k) => {
+      const src = frames[Math.min(Math.max(f + k - w, 0), frames.length - 1)];
+      for (let c = 0; c < 4; c++) acc[c] += g * src[c];
+      tot += g;
+    });
+    out.push(acc.map(v => v / tot));
+  }
+  return out;
+}
+const tourTrack = tourFrames();
+let doorLeaves = [];  // interior doors the route passes through, hidden while touring
+let tour = null;      // { t: seconds into the track, playing }
+const tourBtn = document.getElementById("tour");
+
+function tourLabel() {
+  tourBtn.textContent = !tour ? "▶ Tour" : tour.playing ? "❚❚ Pause tour" : "▶ Resume tour";
+  tourBtn.classList.toggle("on", !!tour);
+}
+function startTour() {
+  if (!tour) {
+    setView({ pos: camera.position.clone(), target: controls.target.clone(), upper: true,
+              hfov: 2 * Math.atan(18 / TOUR.lens), shiftY: 0, near: 0.12 });
+    clearRoom();
+    document.querySelectorAll("[data-view]").forEach(b => b.classList.remove("on"));
+    doorLeaves.forEach(o => (o.visible = false));
+    tour = { t: 0, playing: true };
+  }
+  tour.playing = true;
+  tourLabel();
+}
+function stopTour() {
+  if (!tour) return;
+  tour = null;
+  doorLeaves.forEach(o => (o.visible = true));
+  tourLabel();
+}
+function pauseTour() {
+  if (tour && tour.playing) { tour.playing = false; tourLabel(); }
+}
+tourBtn.onclick = () => (tour && tour.playing ? pauseTour() : startTour());
+addEventListener("keydown", e => {
+  if (e.key === " " && tour) { e.preventDefault(); tour.playing ? pauseTour() : startTour(); }
+  if (e.key === "Escape") stopTour();
+});
+function stepTour(dt) {
+  if (!tour || !tour.playing) return;
+  tour.t += dt;
+  const f = tour.t * TOUR.fps, last = tourTrack.length - 1;
+  if (f >= last) {  // finished on the album view: hand back to the orbit controls
+    tour.t = last / TOUR.fps;
+    tour.playing = false;
+  }
+  const i = Math.min(Math.floor(f), last), j = Math.min(i + 1, last), u = Math.min(f - i, 1);
+  const [x, y, yaw, pitch] = tourTrack[i].map((v, c) => v + (tourTrack[j][c] - v) * u);
+  const a = THREE.MathUtils.degToRad(yaw), p = THREE.MathUtils.degToRad(pitch);
+  camera.position.copy(B(x, y, TOUR.eye));
+  controls.target.copy(B(x + 1.5 * Math.cos(a) * Math.cos(p), y + 1.5 * Math.sin(a) * Math.cos(p),
+                         TOUR.eye + 1.5 * Math.sin(p)));
+  if (!tour.playing) { stopTour(); tourBtn.textContent = "↺ Tour again"; }
+}
 
 // Baked surfaces (materials "viewer_*" from blender/export_viewer.py): colour map x light
 // map, with the light map stored as light / LIGHT_SCALE in the emissive slot.
@@ -262,6 +418,14 @@ new GLTFLoader().setDRACOLoader(draco).load("house.glb?t=" + Date.now(), gltf =>
     }
     if (o.parent === root && UPPER.test(o.name)) upperParts.push(o);
   });
+  // door leaves within 0.5 m of the tour's path are the ones it walks through
+  root.updateMatrixWorld(true);
+  root.traverse(o => {
+    if (!/^Arch_Door_\d+_Leaf/.test(o.name) || o.parent !== root) return;
+    const c = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3());  // three coords
+    if (tourTrack.some(([x, y]) => Math.hypot(x - c.x, -y - c.z) < 0.5)) doorLeaves.push(o);
+  });
+  console.log("tour doors:", doorLeaves.map(o => o.name));
   console.log("baked meshes:", baked);
   scene.add(root);
   document.getElementById("loading").remove();
@@ -276,9 +440,15 @@ addEventListener("resize", () => {
 });
 // orbiting away from a matched view goes back to a normal perspective
 controls.addEventListener("start", () => {
+  pauseTour();
   if (current && (current.shiftY || current.near)) { current = { ...current, shiftY: 0, near: 0 }; frameCamera(); }
 });
-renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  stepTour(Math.min(clock.getDelta(), 0.1));  // a hidden tab doesn't jump ahead
+  controls.update();
+  renderer.render(scene, camera);
+});
 </script>
 </body>
 </html>
