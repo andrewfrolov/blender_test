@@ -36,8 +36,6 @@
 <div id="ui">
   <button data-view="album" class="on">Album view</button>
   <button data-view="ground">Ground floor</button>
-  <button data-view="sofa">Sofa</button>
-  <button data-view="kitchen">Kitchen</button>
   <button data-view="house">Whole house</button>
   <button id="upper">Show upper floors</button>
 </div>
@@ -87,8 +85,6 @@ const VIEWS = {
   album:   { pos: B(3.35, 3.25, 1.05), target: B(2.10, 11.0, 1.05), upper: true,
              hfov: 2 * Math.atan(18 / 20), shiftY: -0.06, near: 0.82 },
   ground:  { pos: B(4.6, -5.5, 13.0), target: B(4.6, 6.4, 0.0), upper: false },
-  sofa:    { pos: B(3.4, 7.9, 1.35),  target: B(1.15, 5.55, 0.5), upper: false },
-  kitchen: { pos: B(4.0, 8.6, 2.6),   target: B(7.0, 11.0, 0.7), upper: false },
   house:   { pos: B(-9.0, -14.0, 9.0), target: B(4.6, 6.0, 3.0), upper: true },
 };
 
