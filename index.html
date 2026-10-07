@@ -61,6 +61,21 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
+// The same 10-minute cache can serve an old index.html right after a deploy. Ask the server
+// for the page's Last-Modified; if a newer version is live, reload once to pick it up.
+(async () => {
+  try {
+    const r = await fetch(location.pathname + location.search, { method: "HEAD", cache: "no-store" });
+    const live = Date.parse(r.headers.get("last-modified"));
+    const mine = Date.parse(document.lastModified);
+    if (live > mine + 1000 && sessionStorage.getItem("reloadedFor") !== String(live)) {
+      sessionStorage.setItem("reloadedFor", String(live));  // at most one reload per version
+      await fetch(location.pathname + location.search, { cache: "reload" });  // refresh the cached copy
+      location.reload();
+    }
+  } catch {}  // offline, or storage blocked: keep the page we have
+})();
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
@@ -413,7 +428,14 @@ function bakedMaterial(m) {
 }
 
 const draco = new DRACOLoader().setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/");
-new GLTFLoader().setDRACOLoader(draco).load("house.glb?t=" + Date.now(), gltf => {  // never a stale cached model
+// GitHub Pages lets browsers reuse files for 10 minutes (max-age=600). "no-cache" makes the
+// browser check with the server on every visit: a cheap 304 when house.glb hasn't changed,
+// the new model as soon as it has, and never a re-download of an unchanged 26 MB.
+const gltfLoader = new GLTFLoader().setDRACOLoader(draco);
+fetch("house.glb", { cache: "no-cache" })
+  .then(r => { if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.arrayBuffer(); })
+  .then(buf => gltfLoader.parseAsync(buf, ""))
+  .then(gltf => {
   const root = gltf.scene;
   let baked = 0;
   root.traverse(o => {
@@ -443,7 +465,7 @@ new GLTFLoader().setDRACOLoader(draco).load("house.glb?t=" + Date.now(), gltf =>
   document.getElementById("loading").remove();
   go("album");
   if (new URLSearchParams(location.search).has("tour")) startTour();  // ?tour opens straight into the walk
-}, undefined, err => {
+}).catch(err => {
   document.getElementById("loading").textContent = "Could not load house.glb: " + err.message;
 });
 
