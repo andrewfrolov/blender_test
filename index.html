@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>House Viewer</title>
+<style>
+  :root { --bg: #e9e7e2; --panel: rgba(255,255,255,0.88); --text: #222; --accent: #4b5a2a; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+               font: 13px/1.4 -apple-system, system-ui, sans-serif; overflow: hidden; }
+  canvas { display: block; }
+  #ui { position: absolute; top: 12px; left: 12px; display: flex; flex-wrap: wrap; gap: 6px;
+        max-width: calc(100% - 24px); }
+  #ui button { border: 0; border-radius: 6px; padding: 7px 11px; background: var(--panel);
+               color: var(--text); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+  #ui button.on { background: var(--accent); color: #fff; }
+  #hint { position: absolute; bottom: 10px; left: 12px; opacity: .65; }
+  #loading { position: absolute; inset: 0; display: grid; place-items: center; font-size: 15px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="loading">Loading house…</div>
+<div id="ui">
+  <button data-view="album" class="on">Album view</button>
+  <button data-view="ground">Ground floor</button>
+  <button data-view="sofa">Sofa</button>
+  <button data-view="kitchen">Kitchen</button>
+  <button data-view="house">Whole house</button>
+  <button id="upper">Show upper floors</button>
+</div>
+<div id="hint">Drag to orbit · right-drag to pan · scroll to zoom</div>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+// same grading as the Blender renders: AgX, exposure +0.45 EV (white balance is in the shader)
+renderer.toneMapping = THREE.AgXToneMapping;
+renderer.toneMappingExposure = Math.pow(2, 0.45);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xecebe4);  // the hazy afternoon sky seen through the windows
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.75;
+
+const sun = new THREE.DirectionalLight(0xfff4e5, 2.2);
+sun.position.set(-8, 14, 10);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 1, far: 40 });
+sun.shadow.bias = -0.0004;
+sun.target.position.set(4.6, 0, -6.4);
+scene.add(sun, sun.target);
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.05, 200);
+const controls = new OrbitControls(camera, renderer.domElement);
+window.viewer = { camera, controls };  // handy for debugging from the console
+controls.enableDamping = true;
+
+// Blender (x, y, z) -> three (x, z, -y)
+const B = (x, y, z) => new THREE.Vector3(x, z, -y);
+const VIEWS = {
+  // Cam_G_Reference in Blender: 20 mm lens (36 mm sensor), shift_y -0.06, clip 0.82 m
+  album:   { pos: B(3.35, 3.25, 1.05), target: B(2.10, 11.0, 1.05), upper: true,
+             hfov: 2 * Math.atan(18 / 20), shiftY: -0.06, near: 0.82 },
+  ground:  { pos: B(4.6, -5.5, 13.0), target: B(4.6, 6.4, 0.0), upper: false },
+  sofa:    { pos: B(3.4, 7.9, 1.35),  target: B(1.15, 5.55, 0.5), upper: false },
+  kitchen: { pos: B(4.0, 8.6, 2.6),   target: B(7.0, 11.0, 0.7), upper: false },
+  house:   { pos: B(-9.0, -14.0, 9.0), target: B(4.6, 6.0, 3.0), upper: true },
+};
+const UPPER = /^(first_|attic_|Roof|Flat_Roof)/;
+let upperParts = [], showUpper = false;
+
+function setUpper(on) {
+  showUpper = on;
+  upperParts.forEach(o => (o.visible = on));
+  document.getElementById("upper").classList.toggle("on", on);
+  document.getElementById("upper").textContent = on ? "Hide upper floors" : "Show upper floors";
+}
+function frameCamera() {
+  const v = current;
+  const aspect = innerWidth / innerHeight;
+  camera.near = v && v.near ? v.near : 0.05;
+  if (v && v.hfov) {  // match a Blender camera: horizontal FOV and vertical lens shift
+    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(v.hfov / 2) / aspect));
+    camera.setViewOffset(innerWidth, innerHeight, 0, v.shiftY * -innerWidth, innerWidth, innerHeight);
+  } else {
+    camera.fov = 45;
+    camera.clearViewOffset();
+  }
+  camera.aspect = aspect;
+  camera.updateProjectionMatrix();
+}
+let current = null;
+function go(name) {
+  const v = VIEWS[name];
+  current = v;
+  frameCamera();
+  camera.position.copy(v.pos);
+  controls.target.copy(v.target);
+  setUpper(v.upper);
+  document.querySelectorAll("[data-view]").forEach(b => b.classList.toggle("on", b.dataset.view === name));
+}
+document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => go(b.dataset.view));
+document.getElementById("upper").onclick = () => setUpper(!showUpper);
+
+// Baked surfaces (materials "viewer_*" from blender/export_viewer.py): colour map x light
+// map, with the light map stored as light / LIGHT_SCALE in the emissive slot.
+const LIGHT_SCALE = 8.0;
+const WHITE_BALANCE = new THREE.Vector3(1.040, 0.996, 0.930);  // Blender's 7000 K setting
+function bakedMaterial(m) {
+  return new THREE.ShaderMaterial({
+    name: m.name,
+    side: m.side,
+    uniforms: { map: { value: m.map }, lightMap: { value: m.emissiveMap },
+                scale: { value: m.emissiveMap ? LIGHT_SCALE : 1.0 }, wb: { value: WHITE_BALANCE } },
+    defines: m.emissiveMap ? { USE_LIGHT: "" } : {},
+    vertexShader: `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      uniform sampler2D map; uniform sampler2D lightMap; uniform float scale; uniform vec3 wb;
+      varying vec2 vUv;
+      void main() {
+        vec3 c = texture2D(map, vUv).rgb;
+        #ifdef USE_LIGHT
+          c *= texture2D(lightMap, vUv).rgb * scale;
+        #endif
+        gl_FragColor = vec4(c * wb, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+}
+
+new GLTFLoader().load("house.glb?t=" + Date.now(), gltf => {  // never a stale cached model
+  const root = gltf.scene;
+  let baked = 0;
+  root.traverse(o => {
+    if (o.isMesh) {
+      if (o.material.name.startsWith("viewer_") && o.material.map) {
+        o.material = bakedMaterial(o.material);
+        o.castShadow = o.receiveShadow = false;  // light is already in the bake
+        baked++;
+      } else {
+        o.castShadow = o.receiveShadow = true;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        mats.forEach(m => { if (m.transparent) o.castShadow = false; });
+      }
+    }
+    if (o.parent === root && UPPER.test(o.name)) upperParts.push(o);
+  });
+  console.log("baked meshes:", baked);
+  scene.add(root);
+  document.getElementById("loading").remove();
+  go("album");
+}, undefined, err => {
+  document.getElementById("loading").textContent = "Could not load house.glb: " + err.message;
+});
+
+addEventListener("resize", () => {
+  frameCamera();
+  renderer.setSize(innerWidth, innerHeight);
+});
+// orbiting away from a matched view goes back to a normal perspective
+controls.addEventListener("start", () => {
+  if (current && (current.shiftY || current.near)) { current = { ...current, shiftY: 0, near: 0 }; frameCamera(); }
+});
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>
