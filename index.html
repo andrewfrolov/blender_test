@@ -124,8 +124,8 @@ const VIEWS = {
   album:   { pos: B(3.35, 3.25, 1.05), target: B(2.10, 11.0, 1.05), level: 3,
              hfov: 2 * Math.atan(18 / 20), shiftY: -0.06, near: 0.82 },
   ground:  { pos: B(4.6, -5.5, 13.0), target: B(4.6, 6.4, 0.0), level: 0 },
-  first:   { pos: B(3.2, -5.0, 15.0), target: B(3.2, 5.6, 2.8), level: 1 },
-  attic:   { pos: B(3.2, -3.5, 16.0), target: B(3.2, 5.6, 5.6), level: 2 },
+  first:   { pos: B(3.2, -5.0, 15.0), target: B(3.2, 5.6, 2.715), level: 1 },
+  attic:   { pos: B(3.2, -3.5, 16.0), target: B(3.2, 5.6, 5.43), level: 2 },
   house:   { pos: B(-9.0, -14.0, 9.0), target: B(4.6, 6.0, 3.0), level: 3 },
 };
 
@@ -141,7 +141,7 @@ const EYE = (x, y, z, yaw, pitch, lens) => {
 // the same from an eye point and a target point (the Cam_F1_* / Cam_F2_* cameras in house.blend)
 const LOOK = (eye, at, lens) => ({ pos: B(...eye), target: B(...at), level: 3,
                                    hfov: 2 * Math.atan(18 / lens), shiftY: 0, near: 0.05 });
-const Z1 = 2.8, Z2 = 5.6;  // first floor and attic levels
+const Z1 = 2.715, Z2 = 5.43;  // first floor and attic levels (config.FLOOR_TO_FLOOR: ceiling 2.465 + slab 0.25)
 const GROUND_ROOMS = {
   Hall: [
     ["From the front door", EYE(5.62, 1.64, 1.40, 112, 2, 15)],
@@ -397,13 +397,18 @@ const TOUR_ROUTE = [
   [4.05, 7.40, 262, -8, 0],
   [3.60, 5.40, 265, -6, 0],
   [3.35, 4.15, 98, -4, 2.5],    // the album view: down the room to the garden
-  // up the straight flight (house/plan.py stair(): y 4.82 to 7.03, 15 risers) to the first
-  // floor; it arrives under the attic stair, so step off west past the end of the balustrade
+  // up the stair to the first floor (blender/rooms/architecture/stair.py: 14 risers; seven
+  // straight treads from y 4.82 to the black post at (5.035, 6.08), then six winders turning west
+  // round it onto the landing): the walking line 0.485 m from the post, the floor z on the line
+  // through the nosings
   [4.50, 4.15, 5, -4, 0],
   [5.30, 4.40, 50, 2, 0],
   [5.52, 4.75, 90, 10, 0],      // the foot of the stair
-  [5.52, 6.20, 90, 6, 0, 1.78],
-  [5.45, 6.72, 150, -2, 0, 2.45],
+  [5.52, 5.60, 90, 8, 0, Z1 * 5.34 / 14],
+  [5.52, 6.08, 90, 6, 0, Z1 * 8 / 14],        // the post: the winders start
+  [5.455, 6.323, 120, 4, 0, Z1 * 10 / 14],
+  [5.278, 6.50, 150, 2, 0, Z1 * 12 / 14],
+  [5.035, 6.565, 180, -2, 0, Z1],             // the landing step
   [4.70, 6.85, 195, -6, 0, Z1], // the first-floor landing
   [4.10, 6.55, 185, -6, 0, Z1],
   [3.20, 6.53, 180, -6, 0, Z1], // study door
@@ -435,12 +440,12 @@ const TOUR_ROUTE = [
   // to the west), the floor z rising evenly along it
   [4.70, 5.50, 0, 12, 0, Z1],
   [4.89, 5.50, 0, 12, 0, Z1],   // first nosing
-  [5.24, 5.495, 15, 12, 0, 3.26],
-  [5.505, 5.605, 45, 12, 0, 3.64],
-  [5.615, 5.87, 90, 12, 0, 4.02],
-  [5.615, 6.25, 100, 10, 0, 4.52],
-  [5.505, 6.515, 135, 6, 0, 4.90],
-  [5.24, 6.625, 180, 2, 0, 5.29],
+  [5.24, 5.495, 15, 12, 0, Z1 + (Z2 - Z1) * 0.164],
+  [5.505, 5.605, 45, 12, 0, Z1 + (Z2 - Z1) * 0.300],
+  [5.615, 5.87, 90, 12, 0, Z1 + (Z2 - Z1) * 0.436],
+  [5.615, 6.25, 100, 10, 0, Z1 + (Z2 - Z1) * 0.614],
+  [5.505, 6.515, 135, 6, 0, Z1 + (Z2 - Z1) * 0.750],
+  [5.24, 6.625, 180, 2, 0, Z1 + (Z2 - Z1) * 0.889],
   [5.00, 6.625, 180, 0, 0, Z2], // the attic landing
   [4.55, 6.45, 230, -8, 0, Z2],
   [4.55, 5.60, 270, -8, 0, Z2],
