@@ -112,7 +112,7 @@ scene.add(sun, sun.target);
 
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.05, 200);
 const controls = new OrbitControls(camera, renderer.domElement);
-window.viewer = { camera, controls, scene };  // handy for debugging from the console
+window.viewer = { camera, controls, scene, renderer };  // handy for debugging from the console
 controls.enableDamping = true;
 
 // Blender (x, y, z) -> three (x, z, -y)
@@ -561,6 +561,21 @@ function stepTour(dt) {
 }
 // from the console: viewer.seekTour(seconds) jumps the tour there, paused
 window.viewer.seekTour = s => { startTour(); tour.t = s; pauseTour(); placeTour(); };
+// for the review mode (see the end of the model load)
+Object.assign(window.viewer, {
+  pauseTour,
+  goTo(v) {  // a saved camera: no view, room or angle button lit
+    setView(v);
+    clearRoom();
+    document.querySelectorAll("[data-view]").forEach(b => b.classList.remove("on"));
+  },
+  state: () => ({
+    level: current ? current.level : 3, room, tour: tour ? tour.t : null,
+    view: document.querySelector("[data-view].on")?.dataset.view ?? null,
+    floor: document.querySelector("#floorlist button.on")?.textContent ?? null,
+    angle: document.querySelector("#angles button.on")?.textContent ?? null,
+  }),
+});
 
 // Baked surfaces (materials "viewer_*" from blender/export_viewer.py): colour map x light
 // map, with the light map stored as light / LIGHT_SCALE in the emissive slot.
@@ -735,6 +750,11 @@ fetch("house.glb", { cache: "no-cache" })
   go("album");
   showFloor("Ground floor");
   if (params.has("tour")) startTour();  // ?tour opens straight into the walk
+  // Review mode: on localhost only, where tools/review/server.py (in the private source repo)
+  // serves review/review.js. GitHub Pages, or a plain local server, has no such file.
+  window.viewer.root = root;
+  if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname))
+    import("./review/review.js").then(m => m.start(window.viewer)).catch(e => console.log("no review mode:", e.message));
 }).catch(err => {
   document.getElementById("loading").textContent = "Could not load house.glb: " + err.message;
 });
