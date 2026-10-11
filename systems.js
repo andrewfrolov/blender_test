@@ -10,6 +10,10 @@
 // transparent, removed red. The panel switches systems, sub-systems and statuses on and off, lists
 // what the checks found (click one to fly there), the open questions and the assumptions. Hover
 // a pipe for its size, length, falls and where it runs.
+//
+// Locally the review mode (review.js) passes opts.review: then the checks are listed on the right, in
+// the review panel's Checks tab, by priority, and clicking a warning's pin opens it there to discuss
+// (a review note about the issue) or acknowledge it. Acknowledged warnings get a green ring.
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
@@ -24,9 +28,16 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const STRUCTURE = /^((ground|first|attic)_(Walls|Walls_Tops|Floor|Windows_Doors)|Flat_Roof|Roof|Arch_Stair|Arch_Stair_Wall|first_Hall_Stair|attic_Lining)$/;
 const STATUS_COLOUR = { existing: "#8f959c", new: "#2e9d4f", removed: "#d64541" };  // Formae's sheets
 const SEV = { error: ["#e0392b", "Error"], warning: ["#e58e1a", "Warning"], info: ["#5b8bd0", "Note"] };
+const SEV_MEANS = {
+  error: "An error: as drawn this can't be built, or it breaks a rule. The model has to change.",
+  warning: "A warning: it can be built, but it needs a decision, a detail for the installer or someone's OK. Acknowledge it once that's settled.",
+  info: "A note, for information.",
+};
+const ACK = "#2f9e44";          // the ring of an acknowledged warning
 const STOREYS = [["ground", "Ground", 0, 0], ["first", "First", 2.715, 1], ["attic", "Attic", 5.43, 2]];
 
 let V, doc = null, etag = null, loadError = null;
+let review = null;              // the review mode's hooks (locally): status(key), open(key), show(), changed()
 let on = false, ui, toggle, tip;
 let roles = new Map();          // root child -> "structure" | "context:<system>" | "hide"
 let originals = new Map();      // mesh -> its material, while ghosted
@@ -36,7 +47,7 @@ const edgeMat = new THREE.LineBasicMaterial({ color: 0x59606b, transparent: true
 const contextMat = new THREE.MeshStandardMaterial({ color: 0xdfe6ee, roughness: 0.6, transparent: true, opacity: 0.7, depthWrite: false });
 let world;                      // the systems' own scene graph
 const G = {};                   // its groups: pipes, points, boxes, issues
-let selected = null;            // { type: "run" | "point" | "box" | "issue", id }
+let selected = null;            // { type: "run" | "point" | "box" | "issue", id } (an issue's id is its key)
 let prefs = {
   systems: {}, subs: {}, status: { existing: true, new: true, removed: true, assumed: true },
   colourBy: "system", ghost: 0.16, fixtures: true, boxes: true, issues: true, info: false,
@@ -82,13 +93,23 @@ body.sy-on #hint { display: none; }
           border-radius: 7px; font-size: 12px; max-width: 320px; display: none; line-height: 1.35; }
 #sy-tip b { font-weight: 600; }
 #sy-tip .m { opacity: .7; }
+.sy-issue { line-height: 1.4; }
+.sy-issue .sy-iss-head { font-size: 12px; margin-bottom: 4px; }
+.sy-issue .sy-iss-text { font-weight: 600; margin-bottom: 6px; }
+.sy-issue .sy-why { margin-bottom: 6px; }
+.sy-issue .sy-means { font-size: 12px; opacity: .7; margin-bottom: 6px; }
+.sy-issue .sy-what { font-size: 12px; background: #f4f7fb; border-radius: 8px; padding: 6px 8px; margin-bottom: 6px; }
+.sy-issue h4 { margin: 0 0 3px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; opacity: .6; }
+.sy-issue .m { opacity: .65; }
 `;
 
 // --- start -----------------------------------------------------------------------------------
 // opts.src: a static services.json to read once instead of the review server's live data
+// opts.review: the review mode's hooks, see the top
 export function start(viewer, opts = {}) {
   V = viewer;
   if (opts.src) { API = opts.src; live = false; }
+  review = opts.review || null;
   document.head.insertAdjacentHTML("beforeend", `<style>${CSS}</style>`);
   try { Object.assign(prefs, JSON.parse(localStorage.getItem("sy-prefs") || "{}")); } catch {}
   toggle = document.createElement("button");
@@ -189,6 +210,7 @@ function setOn(v) {
     for (const o of V.root.children) o.visible = (o.userData.level ?? 0) <= level;
   }
   render();
+  review?.changed();
 }
 
 function ghost(onOff) {
@@ -275,6 +297,10 @@ async function poll() {
 const sysOn = id => !!prefs.systems[id];
 const subOf = (system, sub) => doc?.systems.find(s => s.id === system)?.subs.find(u => u.id === sub);
 const sysName = id => doc?.systems.find(s => s.id === id)?.name ?? id;
+const keyOf = (is, k) => is.key ?? "k" + k;                       // an older services.json has no keys
+const issueBy = key => doc?.issues.find((is, k) => keyOf(is, k) === key);
+const ackOf = key => review?.status(key) === "acknowledged";
+const whereOf = is => !is.at ? "" : is.at[2] < -0.15 ? "crawl space" : ["ground floor", "first floor", "attic"][is.level] ?? "";
 function showItem(it) {
   const st = prefs.status;
   return sysOn(it.system) && (it.sub == null || prefs.subs[it.system + "/" + it.sub] !== false)
@@ -433,15 +459,22 @@ function build() {
   }
   doc.issues.forEach((is, k) => {
     if (!is.at || (is.sev === "info" && !prefs.info)) return;
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: issueTexture(is.sev, isSel("issue", k)), sizeAttenuation: false,
-      depthTest: false, depthWrite: false, toneMapped: false }));
+    const key = keyOf(is, k);
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: issueTexture(is.sev, isSel("issue", key), ackOf(key)),
+      sizeAttenuation: false, depthTest: false, depthWrite: false, toneMapped: false }));
     s.position.copy(B(...is.at));
     s.renderOrder = 1002;
-    s.userData = { type: "issue", id: k, level: is.level, show: sysOn(is.system) };
+    s.userData = { type: "issue", id: key, sev: is.sev, level: is.level, show: sysOn(is.system) };
     G.issues.add(s);
   });
   sizeSprites();
   render();
+  review?.changed();
+}
+
+// the pins again, as the review notes say (acknowledged or not) and the selection
+function paintIssues() {
+  for (const s of G.issues?.children ?? []) s.material.map = issueTexture(s.userData.sev, isSel("issue", s.userData.id), ackOf(s.userData.id));
 }
 
 // a piece of equipment (a point with a box): a dark block outlined in its sub-system's colour, and
@@ -478,18 +511,19 @@ function equipment(p) {
 }
 
 const texCache = new Map();
-function issueTexture(sev, sel) {
-  const key = sev + sel;
+// a pin: the severity's colour in a ring, white, or green once acknowledged; black round it when selected
+function issueTexture(sev, sel, ack = false) {
+  const key = `${sev}/${sel}/${ack}`;
   if (texCache.has(key)) return texCache.get(key);
   const c = document.createElement("canvas");
   c.width = c.height = 64;
   const x = c.getContext("2d");
+  const disc = (r, colour) => { x.beginPath(); x.arc(32, 32, r, 0, 2 * Math.PI); x.fillStyle = colour; x.fill(); };
+  if (sel) disc(31, "#111");
+  if (ack) disc(sel ? 27 : 31, ACK);
+  else if (!sel) disc(26, "#fff");
   x.beginPath();
-  x.arc(32, 32, sel ? 30 : 26, 0, 2 * Math.PI);
-  x.fillStyle = sel ? "#111" : "#fff";
-  x.fill();
-  x.beginPath();
-  x.arc(32, 32, 21, 0, 2 * Math.PI);
+  x.arc(32, 32, ack ? 19 : 21, 0, 2 * Math.PI);
   x.fillStyle = SEV[sev][0];
   x.fill();
   x.fillStyle = "#fff";
@@ -528,7 +562,8 @@ function pickAt(e, click) {
   if (click) {
     selected = { type: u.type, id: u.id };
     build();
-    $(".sy-selected", ui)?.scrollIntoView({ block: "nearest" });
+    if (u.type === "issue" && review) review.open(u.id);
+    else $(".sy-selected", ui)?.scrollIntoView({ block: "nearest" });
     return;
   }
   tip.innerHTML = tipHTML(u.type, u.id);
@@ -564,8 +599,11 @@ function tipHTML(type, id) {
       ${Math.round((b.z[1] - b.z[0]) * 1000)} mm high${b.note ? `<br><span class="m">${esc(b.note)}</span>` : ""}`;
   }
   if (type === "issue") {
-    const is = doc.issues[id];
-    return `<b style="color:${SEV[is.sev][0]}">${SEV[is.sev][1]}</b> ${esc(is.text)}`;
+    const is = issueBy(id);
+    if (!is) return "";
+    const st = review?.status(id);
+    return `<b style="color:${SEV[is.sev][0]}">${SEV[is.sev][1]}</b> ${esc(is.text)}${st ? `<br><span class="m">${st === "acknowledged"
+      ? "✓ acknowledged" : "discussed: " + esc(st)}</span>` : ""}${review ? '<br><span class="m">Click: details and discussion on the right</span>' : ""}`;
   }
   return "";
 }
@@ -591,7 +629,7 @@ function render() {
   }).join("");
   const st = prefs.status;
   const cb = (key, text, val) => `<label><input type="checkbox" data-pref="${key}" ${val ? "checked" : ""}> ${text}</label>`;
-  const issues = doc.issues.map((is, k) => [is, k]).filter(([is]) => sysOn(is.system) && (prefs.info || is.sev !== "info"));
+  const issues = doc.issues.map((is, k) => [is, keyOf(is, k)]).filter(([is]) => sysOn(is.system) && (prefs.info || is.sev !== "info"));
   const counts = ["error", "warning", "info"].map(s => [s, doc.issues.filter(i => i.sev === s && sysOn(i.system)).length]);
   const lv = level();
   ui.innerHTML = `
@@ -614,7 +652,8 @@ function render() {
     ${selected ? `<section class="sy-selected"><h3>Selected</h3><div class="sel-box">${selectedHTML()}</div></section>` : ""}
     <section><h3>Checks</h3><div class="muted" style="margin-bottom:4px">${counts.map(([s, n]) => `${n} ${SEV[s][1].toLowerCase()}${n === 1 ? "" : "s"}`).join(" · ")}
       · <label><input type="checkbox" data-pref="info" ${prefs.info ? "checked" : ""}> notes</label></div>
-      ${issues.length ? issues.map(([is, k]) => `<div class="iss${isSel("issue", k) ? " sel" : ""}" data-issue="${k}">
+      ${review ? `<button data-act="checks">List them by priority on the right ›</button>`
+        : issues.length ? issues.map(([is, k]) => `<div class="iss${isSel("issue", k) ? " sel" : ""}" data-issue="${k}">
         <span class="dot" style="background:${SEV[is.sev][0]}"></span><span>${esc(is.text)}</span></div>`).join("") : '<span class="muted">Nothing found.</span>'}
     </section>
     ${doc.questions.length ? `<section><details open><summary><b>Open questions</b> (${doc.questions.filter(q => sysOn(q.system)).length})</summary><ul>
@@ -644,6 +683,7 @@ function onPanelClick(e) {
   const t = e.target;
   const act = t.closest("[data-act]")?.dataset.act;
   if (act === "close") return setOn(false);
+  if (act === "checks") return review?.show();
   if (act === "all") { V.goTo({ pos: V.camera.position.clone(), target: V.controls.target.clone(), level: 3 }); return render(); }
   if (act === "plan") { const lv = level(); storeyView(Math.min(lv, 2), true); return render(); }
   const sb = t.closest("[data-storey]");
@@ -651,15 +691,7 @@ function onPanelClick(e) {
   const cb = t.closest("[data-colour]");
   if (cb) { prefs.colourBy = cb.dataset.colour; save(); build(); return; }
   const iss = t.closest("[data-issue]");
-  if (iss) {
-    const k = +iss.dataset.issue, is = doc.issues[k];
-    selected = { type: "issue", id: k };
-    if (is.at) {
-      const at = B(...is.at);
-      V.goTo({ pos: at.clone().add(new THREE.Vector3(2.2, 1.6, 2.6)), target: at, level: Math.min(3, is.level) });
-    }
-    build();
-  }
+  if (iss) focusIssue(iss.dataset.issue);
 }
 
 function onPanelChange(e) {
@@ -677,3 +709,55 @@ function onKey(e) {
   if (e.target.closest?.("input, textarea, select")) return;
   if (e.key.toLowerCase() === "s" && !e.metaKey && !e.ctrlKey && !e.altKey) setOn(!on);
 }
+
+// --- for the review mode: the checks listed and discussed in its panel -------------------------
+export const SEVERITY = SEV;
+export const isOn = () => on;
+export { setOn };
+export const loaded = () => !!doc;
+export const systemOn = id => sysOn(id);
+export const systemName = id => sysName(id);
+export const hasIssue = key => !!issueBy(key);
+
+// what the checks found in the systems shown (and the notes, if they are on), in the checks' order
+export function issues() {
+  if (!doc) return [];
+  return doc.issues.map((is, k) => ({ ...is, key: keyOf(is, k), systemName: sysName(is.system), where: whereOf(is) }))
+    .filter(is => sysOn(is.system) && (prefs.info || is.sev !== "info"));
+}
+
+// select an issue's pin and fly to it
+export function focusIssue(key, fly = true) {
+  const is = issueBy(key);
+  if (!is) return;
+  selected = { type: "issue", id: key };
+  if (fly && is.at) {
+    const at = B(...is.at);
+    V.goTo({ pos: at.clone().add(new THREE.Vector3(2.2, 1.6, 2.6)), target: at, level: Math.min(3, is.level) });
+  }
+  build();
+}
+
+// the review notes changed: the pins' rings
+export function refresh() {
+  paintIssues();
+}
+
+// an issue explained: what it is, why it matters, what it concerns, what else the checks say about that
+export function issueDetail(key) {
+  const is = issueBy(key);
+  if (!is) return "";
+  const where = whereOf(is), ref = is.ref || "";
+  const what = ref.startsWith("point:") ? (doc.points.some(p => p.id === ref.slice(6)) ? tipHTML("point", ref.slice(6)) : "")
+    : doc.runs.some(r => r.id === ref) ? tipHTML("run", ref) : "";
+  const others = doc.issues.filter(i => i !== is && ref && i.ref === ref && i.sev !== "info");
+  return `<div class="sy-issue">
+    <div class="sy-iss-head"><b style="color:${SEV[is.sev][0]}">${SEV[is.sev][1]}</b> · ${esc(sysName(is.system))}${where ? " · " + where : ""}</div>
+    <div class="sy-iss-text">${esc(is.text)}</div>
+    ${is.why ? `<div class="sy-why">${esc(is.why)}</div>` : ""}
+    <div class="sy-means">${SEV_MEANS[is.sev]}</div>
+    ${what ? `<div class="sy-what"><h4>It concerns</h4>${what}</div>` : ""}
+    ${others.length ? `<div class="sy-what"><h4>Also found there</h4>${others.map(i =>
+      `<span style="color:${SEV[i.sev][0]}">●</span> ${esc(i.text)}`).join("<br>")}</div>` : ""}</div>`;
+}
+
