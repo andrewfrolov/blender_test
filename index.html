@@ -288,7 +288,7 @@ function levelOf(name) {
   if (split) return +split[1];
   if (/^(Roof|Ext_Roof|attic_Lining|attic_Roof_Window)/.test(name)) return 3;
   if (/^(attic_|Ext_Gable)/.test(name)) return 2;
-  if (/^(first_|Flat_Roof)/.test(name)) return 1;
+  if (/^(first_|Flat_Roof|Ext_Heat_Pump)/.test(name)) return 1;   // the annex roof and what stands on it
   return 0;
 }
 let levelParts = [];
@@ -756,10 +756,18 @@ fetch("house.glb", { cache: "no-cache" })
   showFloor("Ground floor");
   if (params.has("tour")) startTour();  // ?tour opens straight into the walk
   // Review mode: on localhost only, where tools/review/server.py (in the private source repo)
-  // serves review/review.js. GitHub Pages, or a plain local server, has no such file.
+  // serves review/review.js, which starts the systems mode with live data. GitHub Pages, or a
+  // plain local server, has no such file: there the systems mode is view-only, from the snapshot
+  // tools/publish.py writes (systems.js, services.json).
   window.viewer.root = root;
-  if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname))
-    import("./review/review.js").then(m => m.start(window.viewer)).catch(e => console.log("no review mode:", e.message));
+  const local = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  (local ? import("./review/review.js") : Promise.reject(new Error("not on localhost")))
+    .then(m => m.start(window.viewer))
+    .catch(e => {
+      console.log("no review mode:", e.message);
+      return import("./systems.js").then(m => m.start(window.viewer, { src: "services.json" }));
+    })
+    .catch(e => console.log("no systems view:", e.message));
 }).catch(err => {
   document.getElementById("loading").textContent = "Could not load house.glb: " + err.message;
 });
