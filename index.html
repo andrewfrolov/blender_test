@@ -282,14 +282,18 @@ addEventListener("keydown", e => { if (room && e.key >= "1" && e.key <= "9") goA
 
 // Which storey a part of the model belongs to (by its Blender object name), for the cut-away
 // views: 1 first floor (with its floor slab, and the flat roof next to it), 2 attic (with the
-// first floor's ceiling), 3 the roof (with its gutters and solar panels) and the attic's ceiling
+// first floor's ceiling), 3 the roof (with its gutters and solar panels) and the attic's ceiling.
+// A room's own ceiling surface (Kitchen_Ceiling, Wet_Bath_Ceiling, first_..._Ceiling: a name
+// ending in _Ceiling) goes with the storey above, like the slab it sits under, so the cut-away
+// view of its own storey looks into the room from above
 function levelOf(name) {
   const split = name.match(/_L(\d)$/);  // split per storey by export_viewer.py (STOREY_SPLIT)
   if (split) return +split[1];
   if (/^(Roof|Ext_Roof|attic_Lining|attic_Roof_Window)/.test(name)) return 3;
-  if (/^(attic_|Ext_Gable)/.test(name)) return 2;
-  if (/^(first_|Flat_Roof|Ext_Heat_Pump)/.test(name)) return 1;   // the annex roof and what stands on it
-  return 0;
+  const ceiling = /_Ceiling$/.test(name) ? 1 : 0;
+  if (/^(attic_|Ext_Gable)/.test(name)) return 2 + ceiling;
+  if (/^(first_|Flat_Roof|Ext_Heat_Pump)/.test(name)) return 1 + ceiling;   // the annex roof and what stands on it
+  return ceiling;
 }
 let levelParts = [];
 function setLevel(n) {
